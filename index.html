@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>虚空海战 - Void Combat</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#060e1a; color:#d4e8f0; font-family:'Segoe UI',Arial,sans-serif; overflow:hidden; user-select:none; }
+
+#main { display:flex; width:100vw; height:100vh; }
+
+/* 左侧面板 */
+#left-panel {
+    width:220px; min-width:220px;
+    background:rgba(5,15,30,0.95);
+    border-right:1px solid #1a3a5c;
+    display:flex; flex-direction:column;
+    padding:10px; gap:8px; overflow-y:auto;
+}
+
+/* 右侧面板 */
+#right-panel {
+    width:220px; min-width:220px;
+    background:rgba(5,15,30,0.95);
+    border-left:1px solid #1a3a5c;
+    display:flex; flex-direction:column;
+    padding:10px; gap:8px; overflow-y:auto;
+}
+
+/* 画布区域 */
+#canvas-area { flex:1; position:relative; overflow:hidden; }
+canvas { display:block; }
+
+/* 面板标题 */
+.panel-title {
+    font-size:11px; font-weight:bold; letter-spacing:2px;
+    color:#4a9fc8; text-transform:uppercase;
+    border-bottom:1px solid #1a3a5c; padding-bottom:4px;
+    margin-bottom:2px;
+}
+
+/* 船名 */
+.ship-name { font-size:14px; font-weight:bold; margin-bottom:4px; }
+.player-color { color:#3de87e; }
+.enemy-color  { color:#e85a3d; }
+
+/* 状态条 */
+.stat-group { margin:4px 0; }
+.stat-label { font-size:11px; color:#8ab0c8; margin-bottom:2px; }
+.bar-wrap { background:#0d1e2e; border-radius:3px; height:14px; position:relative; border:1px solid #1a3a5c; }
+.bar-inner { height:100%; border-radius:2px; transition:width .25s; }
+.bar-text { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:bold; }
+.bar-hull     { background:linear-gradient(90deg,#c0392b,#e74c3c); }
+.bar-shield-p { background:linear-gradient(90deg,#155a9e,#2980b9); }
+.bar-shield-s { background:linear-gradient(90deg,#6c2fa0,#9b59b6); }
+.bar-shield-f { background:linear-gradient(90deg,#1a7a44,#2ecc71); }
+.bar-shield-d { background:linear-gradient(90deg,#7a5c00,#f39c12); }
+
+/* 技能按钮 */
+.skill-btn {
+    width:100%; padding:6px 8px; margin:2px 0;
+    background:#0d1e2e; border:1px solid #1a3a5c;
+    color:#d4e8f0; cursor:pointer; border-radius:4px;
+    font-size:11px; text-align:left; transition:all .15s;
+    display:flex; justify-content:space-between; align-items:center;
+}
+.skill-btn:hover:not(:disabled) { background:#152a40; border-color:#3a7ab0; }
+.skill-btn:disabled { opacity:.4; cursor:not-allowed; }
+.skill-btn.active { border-color:#3de87e; color:#3de87e; }
+.skill-cd { font-size:10px; color:#e87e3d; }
+
+/* 行动控制 */
+#action-bar {
+    position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+    background:rgba(5,15,30,0.92); border:1px solid #1a3a5c;
+    border-radius:8px; padding:10px 16px;
+    display:flex; flex-direction:column; gap:6px; align-items:center;
+    min-width:400px;
+}
+.action-row { display:flex; gap:8px; justify-content:center; align-items:center; }
+.act-btn {
+    padding:8px 14px; background:#0d1e2e;
+    border:1px solid #2a5a8c; color:#d4e8f0;
+    border-radius:5px; cursor:pointer; font-size:13px;
+    transition:all .15s; min-width:80px; text-align:center;
+}
+.act-btn:hover:not(:disabled) { background:#1a3a5c; border-color:#4a9fc8; }
+.act-btn:disabled { opacity:.35; cursor:not-allowed; }
+.act-btn.fire-btn { border-color:#8a4a0e; }
+.act-btn.fire-btn:hover:not(:disabled) { background:#2a1500; border-color:#e87e3d; }
+.act-btn.end-btn { border-color:#2a6a2a; background:#0a1e0a; }
+.act-btn.end-btn:hover:not(:disabled) { background:#0d2e0d; border-color:#3de87e; }
+.act-btn.confirm-btn { border-color:#3de87e; color:#3de87e; }
+
+/* 状态栏 */
+#status-bar {
+    position:absolute; top:10px; left:50%; transform:translateX(-50%);
+    background:rgba(5,15,30,0.92); border:1px solid #1a3a5c;
+    border-radius:6px; padding:6px 20px;
+    text-align:center; font-size:13px;
+    pointer-events:none;
+}
+.turn-player { color:#3de87e; font-weight:bold; }
+.turn-enemy  { color:#e85a3d; font-weight:bold; }
+
+/* 战斗日志 */
+#log-box {
+    position:absolute; right:230px; bottom:110px;
+    width:260px; max-height:180px;
+    background:rgba(5,15,30,0.82); border:1px solid #1a3a5c;
+    border-radius:6px; padding:8px; overflow-y:auto;
+    font-size:11px; pointer-events:none;
+}
+.log-line { padding:1px 0; border-bottom:1px solid rgba(26,58,92,0.4); }
+
+/* 移动提示 */
+#move-hint {
+    position:absolute; top:55px; left:50%; transform:translateX(-50%);
+    background:rgba(5,15,30,0.88); border:1px solid #f39c12;
+    border-radius:5px; padding:5px 14px; font-size:12px; color:#f39c12;
+    pointer-events:none; display:none;
+}
+
+/* 结束画面 */
+#overlay {
+    position:absolute; inset:0; background:rgba(0,0,0,.8);
+    display:none; align-items:center; justify-content:center; flex-direction:column; gap:16px;
+}
+#overlay h2 { font-size:32px; }
+#overlay .restart-btn {
+    padding:12px 32px; background:#0d1e2e; border:2px solid #4a9fc8;
+    color:#d4e8f0; border-radius:8px; cursor:pointer; font-size:16px;
+}
+#overlay .restart-btn:hover { background:#1a3a5c; }
+</style>
+</head>
+<body>
+<div id="main">
+    <!-- 左面板：玩家信息 -->
+    <div id="left-panel">
+        <div class="panel-title">玩家旗舰</div>
+        <div class="ship-name player-color" id="p-name">圣裁号</div>
+
+        <div class="stat-group">
+            <div class="stat-label">船体完整性</div>
+            <div class="bar-wrap"><div class="bar-inner bar-hull" id="p-hull"></div><div class="bar-text" id="p-hull-t"></div></div>
+        </div>
+        <div class="stat-group">
+            <div class="stat-label">船头护盾 (F)</div>
+            <div class="bar-wrap"><div class="bar-inner bar-shield-f" id="p-sf"></div><div class="bar-text" id="p-sf-t"></div></div>
+        </div>
+        <div class="stat-group">
+            <div class="stat-label">左舷护盾 (P)</div>
+            <div class="bar-wrap"><div class="bar-inner bar-shield-p" id="p-sp"></div><div class="bar-text" id="p-sp-t"></div></div>
+        </div>
+        <div class="stat-group">
+            <div class="stat-label">右舷护盾 (S)</div>
+            <div class="bar-wrap"><div class="bar-inner bar-shield-s" id="p-ss"></div><div class="bar-text" id="p-ss-t"></div></div>
+        </div>
+        <div class="stat-group">
+            <div class="stat-label">背部护盾 (D)</div>
+            <div class="bar-wrap"><div class="bar-inner bar-shield-d" id="p-sd"></div><div class="bar-text" id="p-sd-t"></div></div>
+        </div>
+
+        <div class="panel-title" style="margin-top:6px;">速度 / 机动</div>
+        <div style="font-size:12px;">速度: <span id="p-speed" style="color:#f1c40f;">—</span> 格</div>
+        <div style="font-size:12px;">机动性: <span id="p-mano" style="color:#f1c40f;">—</span> 格/转</div>
+
+        <div class="panel-title" style="margin-top:6px;">岗位技能</div>
+        <button class="skill-btn" id="sk-newheading">
+            <span>新航向 (90°转向)</span><span class="skill-cd" id="sk-nh-cd"></span>
+        </button>
+        <button class="skill-btn" id="sk-swingrun">
+            <span>急转弯 (180°)</span><span class="skill-cd" id="sk-sr-cd"></span>
+        </button>
+        <button class="skill-btn" id="sk-reinforce">
+            <span>强化护盾</span><span class="skill-cd" id="sk-ri-cd"></span>
+        </button>
+        <button class="skill-btn" id="sk-restart">
+            <span>重启护盾 (全量)</span><span class="skill-cd" id="sk-rs-cd"></span>
+        </button>
+        <button class="skill-btn" id="sk-warpwave">
+            <span>翘曲波 (旋转敌舰)</span><span class="skill-cd" id="sk-ww-cd"></span>
+        </button>
+        <button class="skill-btn" id="sk-scan">
+            <span>弱点扫描 (增伤)</span><span class="skill-cd" id="sk-sc-cd"></span>
+        </button>
+    </div>
+
+    <!-- 画布 -->
+    <div id="canvas-area">
+        <canvas id="c"></canvas>
+
+        <div id="status-bar">
+            <span id="status-text">初始化中...</span>
+            &nbsp;|&nbsp; 第 <span id="turn-num">1</span> 回合
+            &nbsp;|&nbsp; 移动剩余: <span id="move-left" style="color:#f1c40f;">—</span>
+        </div>
+
+        <div id="move-hint">规划路径：点击格子移动，右键取消 | 必须用完所有移动力后才能结束规划</div>
+
+        <div id="action-bar">
+            <div class="action-row">
+                <button class="act-btn" id="btn-plan">📐 规划移动</button>
+                <button class="act-btn fire-btn" id="btn-fire-prow">🔥 船头炮</button>
+                <button class="act-btn fire-btn" id="btn-fire-port">🔥 左舷炮</button>
+                <button class="act-btn fire-btn" id="btn-fire-star">🔥 右舷炮</button>
+                <button class="act-btn fire-btn" id="btn-fire-dors">🔥 背部炮</button>
+            </div>
+            <div class="action-row">
+                <button class="act-btn confirm-btn" id="btn-confirm" style="display:none;">✓ 确认路径</button>
+                <button class="act-btn" id="btn-cancel-plan" style="display:none;">✗ 取消规划</button>
+                <button class="act-btn end-btn" id="btn-end">结束回合 →</button>
+            </div>
+        </div>
+
+        <div id="log-box"></div>
+
+        <div id="overlay">
+            <h2 id="overlay-title"></h2>
+            <button class="restart-btn" onclick="startGame()">重新开始</button>
+        </div>
+    </div>
+
+    <!-- 右面板：敌方信息 -->
+    <div id="right-panel">
+        <div class="panel-title">敌方舰船</div>
+        <div class="ship-name enemy-color" id="e-name">异端号</div>
+
+        <div class="stat-group">
+            <div class="stat-label">船体完整性</div>
+            <div class="bar-wrap"><div class="bar-inner bar-hull" id="e-hull"></div><div class="bar-text" id="e-hull-t"></div></div>
+        </div>
+        <div class="stat-group">
+            <div class="stat-label">船头护盾 (F)</div>
+            <div class="bar-wrap"><div class="bar-inner bar-shield-f" id="e-sf"></div><div class="bar-text" id="e-sf-t"></div></div>
+        </div>
+        <div class="stat-group">
+            <div class="stat-label">左舷护盾 (P)</div>
+            <div class="bar-wrap"><div class="bar-inner bar-shield-p" id="e-sp"></div><div class="bar-text" id="e-sp-t"></div></div>
+        </div>
+        <div class="stat-group">
+            <div class="stat-label">右舷护盾 (S)</div>
+            <div class="bar-wrap"><div class="bar-inner bar-shield-s" id="e-ss"></div><div class="bar-text" id="e-ss-t"></div></div>
+        </div>
+        <div class="stat-group">
+            <div class="stat-label">背部护盾 (D)</div>
+            <div class="bar-wrap"><div class="bar-inner bar-shield-d" id="e-sd"></div><div class="bar-text" id="e-sd-t"></div></div>
+        </div>
+
+        <div class="panel-title" style="margin-top:6px;">速度 / 机动</div>
+        <div style="font-size:12px;">速度: <span id="e-speed" style="color:#e87e3d;">—</span> 格</div>
+        <div style="font-size:12px;">机动性: <span id="e-mano" style="color:#e87e3d;">—</span> 格/转</div>
+
+        <div class="panel-title" style="margin-top:6px;">操作说明</div>
+        <div style="font-size:11px; color:#8ab0c8; line-height:1.7;">
+            <b style="color:#d4e8f0;">移动规则</b><br>
+            · 每回合必须走完全部格数<br>
+            · 每走N格才能转向45°<br>
+            · 不可原地转向<br><br>
+            <b style="color:#d4e8f0;">开火规则</b><br>
+            · 可在移动中途任意点开火<br>
+            · 武器有射击弧范围限制<br>
+            · 开火不消耗行动点<br><br>
+            <b style="color:#d4e8f0;">护盾</b><br>
+            · 四方向独立，不自动回复<br>
+            · 调整朝向保护弱盾面<br><br>
+            <b style="color:#d4e8f0;">快捷键</b><br>
+            · WASD / 方向键：规划转向<br>
+            · 1-4：开火<br>
+            · Enter：确认/结束
+        </div>
+    </div>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
