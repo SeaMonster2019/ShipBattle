@@ -60,6 +60,8 @@ function screenToWorld(sx, sy) {
 
 // ── 常量 ────────────────────────────────────────────────────
 const TILE = 52;          // 格子像素大小
+const COLS = WORLD_COLS;
+const ROWS = WORLD_ROWS;
 
 // 8方向 (角度 deg → 格子偏移)
 // 方向索引 0=右 1=右下 2=下 3=左下 4=左 5=左上 6=上 7=右上
@@ -106,13 +108,13 @@ function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
 function rnd(lo,hi){return lo+Math.random()*(hi-lo);}
 function rndInt(lo,hi){return lo+Math.floor(Math.random()*(hi-lo+1));}
 
-// 格坐标 → 像素中心
+// 格坐标 → 世界像素中心
 function g2p(col,row){
     return { x: col*TILE + TILE/2, y: row*TILE + TILE/2 };
 }
-// 像素 → 格坐标
-function p2g(px,py){
-    return { col:Math.floor(px/TILE), row:Math.floor(py/TILE) };
+// 世界像素 → 格坐标
+function p2g(wx,wy){
+    return { col:Math.floor(wx/TILE), row:Math.floor(wy/TILE) };
 }
 
 // 方向索引正规化
@@ -388,20 +390,17 @@ let G = {}; // 全局游戏状态
 function startGame(){
     document.getElementById('overlay').style.display='none';
 
-    const COLS = Math.floor(canvas.width/TILE);
-    const ROWS = Math.floor(canvas.height/TILE);
-
     G = {
-        cols: COLS, rows: ROWS,
+        cols: WORLD_COLS, rows: WORLD_ROWS,
         player: new Ship({
-            col:3, row:Math.floor(ROWS/2), dir:0, // 朝右
+            col:3, row:Math.floor(WORLD_ROWS/2), dir:0, // 朝右
             team:'player',
             color: C.playerShip, darkColor: C.playerDark,
             hull:120, armour:10, speed:5, mano:2,
             shieldF:40, shieldP:55, shieldS:55, shieldD:30,
         }),
         enemy: new Ship({
-            col:COLS-4, row:Math.floor(ROWS/2), dir:4, // 朝左
+            col:WORLD_COLS-4, row:Math.floor(WORLD_ROWS/2), dir:4, // 朝左
             team:'enemy',
             color: C.enemyShip, darkColor: C.enemyDark,
             hull:100, armour:8, speed:4, mano:3,
@@ -417,37 +416,41 @@ function startGame(){
         // 移动规划
         planning: false,
         path: [],         // 已规划的格坐标序列 [{col,row,dir}]
-        pathMoveCount: 0, // 累计移动格数
-        turnCountInPath:0,// 路径中已用转向次数
-        stepsSinceLastTurn:0, // 上次转向后走了多少格
+        pathMoveCount: 0,
+        turnCountInPath:0,
+        stepsSinceLastTurn:0,
 
         // 动画队列
-        animQueue: [],    // {type:'move'|'fire', ...}
+        animQueue: [],
         animTimer: 0,
         animPlaying: false,
 
         // 技能冷却
         skills: {
-            newHeading: 0,  // 新航向：CD=3
-            swingRun:   0,  // 急转弯：CD=4
-            reinforce:  0,  // 强化护盾：CD=2
-            restart:    0,  // 重启护盾：CD=5
-            warpWave:   0,  // 翘曲波：CD=4
-            scan:       0,  // 弱点扫描：CD=3
+            newHeading: 0,
+            swingRun:   0,
+            reinforce:  0,
+            restart:    0,
+            warpWave:   0,
+            scan:       0,
         },
-        swingRunUsed: false,   // 急转弯本回合是否已用
-        newHeadingUsed: false, // 新航向本回合是否已用
+        swingRunUsed: false,
+        newHeadingUsed: false,
 
-        // 待确认的开火列表（移动中途）
+        // 移动规划中途的开火标记列表
+        // 每条记录: { wep, afterStepIdx }  afterStepIdx=-1 表示移动前
         pendingFires:[],
 
-        // 弱点扫描激活
         scanActive: false,
-
-        // 日志
         logs: [],
         waveOffset: 0,
     };
+
+    // 初始化相机立即对准中点
+    const midX = (G.player.animX + G.enemy.animX) / 2;
+    const midY = (G.player.animY + G.enemy.animY) / 2;
+    cam.x = cam.targetX = clamp(midX - canvas.width/2, 0, WORLD_COLS*TILE - canvas.width);
+    cam.y = cam.targetY = clamp(midY - canvas.height/2, 0, WORLD_ROWS*TILE - canvas.height);
 
     updateHUD();
     updateSkillBtns();
@@ -543,10 +546,13 @@ function setPhase(ph){
     // 规划按钮
     document.getElementById('btn-plan').disabled   = !isPlayer || G.planning;
     document.getElementById('btn-end').disabled    = !isPlayer || G.planning;
-    document.getElementById('btn-fire-prow').disabled = !isPlayer || G.planning;
-    document.getElementById('btn-fire-port').disabled = !isPlayer || G.planning;
-    document.getElementById('btn-fire-star').disabled = !isPlayer || G.planning;
-    document.getElementById('btn-fire-dors').disabled = !isPlayer || G.planning;
+
+    // 开火按钮：规划中也可用（插入中途开火标记）
+    const fireEnabled = isPlayer && (G.planning || true);
+    document.getElementById('btn-fire-prow').disabled = !isPlayer;
+    document.getElementById('btn-fire-port').disabled = !isPlayer;
+    document.getElementById('btn-fire-star').disabled = !isPlayer;
+    document.getElementById('btn-fire-dors').disabled = !isPlayer;
 
     document.getElementById('btn-confirm').style.display    = G.planning?'':'none';
     document.getElementById('btn-cancel-plan').style.display= G.planning?'':'none';
@@ -559,18 +565,53 @@ function setPhase(ph){
 }
 
 function updateFireBtns(){
-    const isPlayer = G.phase==='player' && !G.planning;
+    const isPlayer = G.phase==='player';
     const p = G.player;
-    const canFire = (wep)=> isPlayer && p.wepCd[wep]===0 && checkFiringArc(p, G.enemy, wep);
-    document.getElementById('btn-fire-prow').disabled = !canFire('PROW');
-    document.getElementById('btn-fire-port').disabled = !canFire('PORT');
-    document.getElementById('btn-fire-star').disabled = !canFire('STARBOARD');
-    document.getElementById('btn-fire-dors').disabled = !canFire('DORSAL');
+
+    // 规划中：判断该武器是否已在pendingFires中预约过 + 是否冷却
+    // 非规划：判断武器冷却 + 射击弧
+    const weps = ['PROW','PORT','STARBOARD','DORSAL'];
+    const btnIds = { PROW:'btn-fire-prow', PORT:'btn-fire-port', STARBOARD:'btn-fire-star', DORSAL:'btn-fire-dors' };
+
+    for(const wep of weps){
+        const btn = document.getElementById(btnIds[wep]);
+        if(!isPlayer){ btn.disabled=true; continue; }
+
+        if(G.planning){
+            // 规划模式：该炮已预约则禁用，或已在冷却
+            const alreadyQueued = G.pendingFires.some(f=>f.wep===wep);
+            const onCd = p.wepCd[wep] > 0;
+            btn.disabled = alreadyQueued || onCd;
+            // 更新按钮文字提示
+            if(alreadyQueued) btn.title=`已标记在路径步骤中`;
+            else if(onCd) btn.title=`冷却中 (${p.wepCd[wep]}回合)`;
+            else btn.title=`点击：在当前路径位置插入开火`;
+        } else {
+            // 非规划：要射击弧对准才能开火
+            const onCd = p.wepCd[wep] > 0;
+            const inArc = checkFiringArc(p, G.enemy, wep);
+            btn.disabled = onCd || !inArc;
+            btn.title = onCd ? `冷却中(${p.wepCd[wep]}回合)` : (!inArc?'敌舰不在射击弧内':'');
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
-//  射击弧判断
+//  规划中插入开火标记
 // ═══════════════════════════════════════════════════════════
+// afterStepIdx = 当前已走的步数（G.path.length），表示"走完第N步后开火"
+function queueFireInPlan(wep){
+    if(!G.planning) return;
+    if(G.player.wepCd[wep]>0){ addLog(`⚠ ${wep} 武器冷却中`,'#e87e3d'); return; }
+    if(G.pendingFires.some(f=>f.wep===wep)){ addLog(`⚠ ${wep} 本回合已标记开火`,'#e87e3d'); return; }
+
+    // 记录在当前路径长度处插入开火
+    G.pendingFires.push({ wep, afterStepIdx: G.path.length });
+    const wnames={PROW:'船头炮',PORT:'左舷炮',STARBOARD:'右舷炮',DORSAL:'背部炮'};
+    addLog(`🔥 已标记：走完第${G.path.length}步后发射 ${wnames[wep]}（执行时判断射击弧）`,'#f39c12');
+    updateFireBtns();
+    renderAll();
+}
 // 判断 target 是否在 shooter 的 wep 武器射程/弧内
 function checkFiringArc(shooter, target, wep){
     // 计算 target 相对 shooter 的格方向
@@ -832,26 +873,41 @@ function useScan(){
 function executePlan(){
     setPhase('anim');
 
-    // 构建动画队列
-    let curCol=G.player.col, curRow=G.player.row;
     const queue=[];
+
+    // 按步骤交织移动+开火
+    // pendingFires 按 afterStepIdx 排序后穿插
+    const fires = [...G.pendingFires].sort((a,b)=>a.afterStepIdx-b.afterStepIdx);
+    let fireIdx = 0;
+
+    // 先处理 afterStepIdx===0 的（移动前开火）
+    while(fireIdx < fires.length && fires[fireIdx].afterStepIdx === 0){
+        queue.push({type:'fire', wep: fires[fireIdx].wep});
+        fireIdx++;
+    }
 
     for(let i=0;i<G.path.length;i++){
         const step=G.path[i];
 
-        // 急转弯标记
+        // 急转弯
         if(step.swingRun){
             queue.push({type:'swingrun', dir: normDir(step.dir+4)});
         }
 
         // 移动到该格
         queue.push({type:'move', col:step.col, row:step.row, dir:step.dir});
-        curCol=step.col; curRow=step.row;
+
+        // 走完第 i+1 步后的开火
+        while(fireIdx < fires.length && fires[fireIdx].afterStepIdx === i+1){
+            queue.push({type:'fire', wep: fires[fireIdx].wep});
+            fireIdx++;
+        }
     }
 
-    // 添加待发射
-    for(const pf of G.pendingFires){
-        queue.push({type:'fire', wep:pf.wep, afterStep:pf.afterStep});
+    // 剩余未消化的开火（afterStepIdx超出path长度，放最后）
+    while(fireIdx < fires.length){
+        queue.push({type:'fire', wep: fires[fireIdx].wep});
+        fireIdx++;
     }
 
     // 敌方AI回合
@@ -905,7 +961,8 @@ function processAnimQueue(dt){
             }
             break;
         case 'fire':
-            if(G.animStepTimer>=0.05){
+            // 延迟一帧后开火（确保动画位置已更新）
+            if(G.animStepTimer>=0.08){
                 doPlayerFire(action.wep);
                 action.done=true;
             }
@@ -1105,38 +1162,49 @@ function renderAll(){
     const W=canvas.width, H=canvas.height;
     ctx.clearRect(0,0,W,H);
 
-    // 海面
+    // 海面底色
     ctx.fillStyle=C.sea;
     ctx.fillRect(0,0,W,H);
 
-    // 波浪
+    // ── 进入世界坐标系（应用相机偏移）──
+    ctx.save();
+    ctx.translate(-Math.round(cam.x), -Math.round(cam.y));
+
+    // 计算可见格范围，只渲染视野内的格子
+    const c0 = Math.max(0, Math.floor(cam.x/TILE)-1);
+    const r0 = Math.max(0, Math.floor(cam.y/TILE)-1);
+    const c1 = Math.min(WORLD_COLS, Math.ceil((cam.x+W)/TILE)+1);
+    const r1 = Math.min(WORLD_ROWS, Math.ceil((cam.y+H)/TILE)+1);
+
+    // 波浪（世界空间）
     ctx.save();
     ctx.strokeStyle='rgba(255,255,255,0.035)';
     ctx.lineWidth=1.5;
+    const worldW = WORLD_COLS*TILE, worldH = WORLD_ROWS*TILE;
     for(let row=0;row<10;row++){
         ctx.beginPath();
-        for(let x=0;x<=W;x+=8){
-            const y=(row/10)*H+Math.sin((x+waveOff)*0.025+row*1.1)*7;
+        for(let x=0;x<=worldW;x+=8){
+            const y=(row/10)*worldH+Math.sin((x+waveOff)*0.025+row*1.1)*7;
             x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
         }
         ctx.stroke();
     }
     ctx.restore();
 
-    // 网格
+    // 网格（只绘可见范围）
     ctx.strokeStyle=C.grid;
     ctx.lineWidth=0.5;
-    for(let c=0;c<=G.cols;c++){
-        ctx.beginPath();ctx.moveTo(c*TILE,0);ctx.lineTo(c*TILE,H);ctx.stroke();
+    for(let c=c0;c<=c1;c++){
+        ctx.beginPath();ctx.moveTo(c*TILE,r0*TILE);ctx.lineTo(c*TILE,r1*TILE);ctx.stroke();
     }
-    for(let r=0;r<=G.rows;r++){
-        ctx.beginPath();ctx.moveTo(0,r*TILE);ctx.lineTo(W,r*TILE);ctx.stroke();
+    for(let r=r0;r<=r1;r++){
+        ctx.beginPath();ctx.moveTo(c0*TILE,r*TILE);ctx.lineTo(c1*TILE,r*TILE);ctx.stroke();
     }
 
-    // 射击弧显示（非规划时显示）
+    // 射击弧（非规划）
     if(G.phase==='player'&&!G.planning) drawFireArcs();
 
-    // 规划路径显示
+    // 规划路径
     if(G.planning) drawPlanPath();
 
     // 粒子
@@ -1149,7 +1217,60 @@ function renderAll(){
     if(G.enemy.alive)  G.enemy.draw();
     if(G.player.alive) G.player.draw();
 
-    // 格坐标标签（debug可选，这里不显示）
+    // ── 退出世界坐标系 ──
+    ctx.restore();
+
+    // ── 屏幕坐标系 HUD（不受相机影响）──
+    drawScreenHUD();
+}
+
+// 规划路径中开火标记的图标显示
+function drawFireMarkers(){
+    const wnames={PROW:'头',PORT:'左',STARBOARD:'右',DORSAL:'背'};
+    const colors={PROW:'#f1c40f',PORT:'#3498db',STARBOARD:'#9b59b6',DORSAL:'#f39c12'};
+
+    const baseSteps=[{col:G.player.col,row:G.player.row},...G.path];
+    for(const pf of G.pendingFires){
+        const stepIdx = Math.min(pf.afterStepIdx, baseSteps.length-1);
+        const st = baseSteps[stepIdx];
+        const px = st.col*TILE+TILE/2;
+        const py = st.row*TILE+TILE/2;
+        // 绘制小火焰图标
+        ctx.save();
+        ctx.fillStyle=colors[pf.wep]||'#f1c40f';
+        ctx.font='bold 14px Arial';
+        ctx.textAlign='center';
+        ctx.shadowColor=colors[pf.wep];
+        ctx.shadowBlur=8;
+        ctx.fillText(`🔥${wnames[pf.wep]}`, px, py-32);
+        ctx.restore();
+    }
+}
+
+function drawScreenHUD(){
+    // 规划模式下的文字提示（屏幕中央顶部）
+    if(G.planning){
+        const canTurnNow = G.stepsSinceLastTurn >= G.player.mano;
+        ctx.fillStyle='#f1c40f';
+        ctx.font='bold 13px Arial';
+        ctx.textAlign='center';
+        ctx.shadowColor='#000'; ctx.shadowBlur=4;
+        ctx.fillText(`已走 ${G.path.length}/${G.player.speed} 格`, canvas.width/2, 40);
+        if(!canTurnNow){
+            ctx.fillStyle='#f39c12';
+            ctx.font='12px Arial';
+            ctx.fillText(`再走 ${G.player.mano-G.stepsSinceLastTurn} 格可转向`, canvas.width/2, 58);
+        }
+        // 开火标记提示
+        if(G.pendingFires.length>0){
+            const wnames={PROW:'船头',PORT:'左舷',STARBOARD:'右舷',DORSAL:'背部'};
+            const fireTxt = G.pendingFires.map(f=>`${wnames[f.wep]}炮(步${f.afterStepIdx})`).join(' | ');
+            ctx.fillStyle='#f39c12';
+            ctx.font='12px Arial';
+            ctx.fillText(`🔥已标记：${fireTxt}`, canvas.width/2, 76);
+        }
+        ctx.shadowBlur=0;
+    }
 }
 
 function drawFireArcs(){
@@ -1249,6 +1370,10 @@ function loop(ts){
     const dt=Math.min((ts-lastTime)/1000,0.05);
     lastTime=ts;
     waveOff+=dt*22;
+
+    // 更新相机
+    updateCamera();
+    lerpCamera(dt);
 
     // 更新动画
     if(G.phase==='anim'){
