@@ -34,23 +34,23 @@ const cam = { x: 0, y: 0, targetX: 0, targetY: 0 };
 const WORLD_COLS = 40;
 const WORLD_ROWS = 30;
 
-// 更新相机目标：以双船中点为中心
-function updateCamera() {
-    if (!G.player || !G.enemy) return;
-    const midX = (G.player.animX + G.enemy.animX) / 2;
-    const midY = (G.player.animY + G.enemy.animY) / 2;
-    cam.targetX = midX - canvas.width  / 2;
-    cam.targetY = midY - canvas.height / 2;
-    // 边界限制
+// 手动相机控制：WASD/方向键移动视角
+const CAM_SPEED = 400; // 像素/秒
+const camKeys = { up:false, down:false, left:false, right:false };
+
+function updateCamera(dt) {
     const maxX = WORLD_COLS * TILE - canvas.width;
     const maxY = WORLD_ROWS * TILE - canvas.height;
-    cam.targetX = clamp(cam.targetX, 0, Math.max(0, maxX));
-    cam.targetY = clamp(cam.targetY, 0, Math.max(0, maxY));
+    if (camKeys.left)  cam.x -= CAM_SPEED * dt;
+    if (camKeys.right) cam.x += CAM_SPEED * dt;
+    if (camKeys.up)    cam.y -= CAM_SPEED * dt;
+    if (camKeys.down)  cam.y += CAM_SPEED * dt;
+    cam.x = clamp(cam.x, 0, Math.max(0, maxX));
+    cam.y = clamp(cam.y, 0, Math.max(0, maxY));
 }
 
-function lerpCamera(dt) {
-    cam.x = lerp(cam.x, cam.targetX, Math.min(1, dt * 6));
-    cam.y = lerp(cam.y, cam.targetY, Math.min(1, dt * 6));
+function lerpCamera(_dt) {
+    // 手动模式下不做 lerp，直接用 cam.x/y
 }
 
 // 屏幕坐标 → 世界像素坐标
@@ -275,7 +275,9 @@ class Ship{
 
     updateAnim(dt){
         if(this.shakeT>0) this.shakeT-=dt;
-        // 平滑插值到目标格
+        // 动画阶段由 processAnimQueue 精确控制位置，不做 lerp，避免残留插值重播
+        if(G.phase==='anim') return;
+        // 玩家操作阶段：平滑插值到当前格（应对瞬移类技能）
         const tx = this.col*TILE+TILE/2;
         const ty = this.row*TILE+TILE/2;
         this.animX = lerp(this.animX, tx, Math.min(1, dt*12));
@@ -444,6 +446,8 @@ function startGame(){
         scanActive: false,
         logs: [],
         waveOffset: 0,
+        turnStartCol: -1,  // 本回合开始时玩家所在列（用于强制移动检测）
+        turnStartRow: -1,
     };
 
     // 初始化相机立即对准中点
@@ -454,6 +458,9 @@ function startGame(){
 
     updateHUD();
     updateSkillBtns();
+    // 初始化回合起始位置
+    G.turnStartCol = G.player.col;
+    G.turnStartRow = G.player.row;
     setPhase('player');
     addLog('⚓ 战斗开始！规划你的航路并开炮！','#f1c40f');
     addLog(`📐 请点击「规划移动」来规划本回合路径。`,'#8ab0c8');
@@ -873,6 +880,12 @@ function useScan(){
 function executePlan(){
     setPhase('anim');
 
+    // 强制对齐动画坐标，防止上回合插值残留导致重播
+    G.player.animX = G.player.col * TILE + TILE/2;
+    G.player.animY = G.player.row * TILE + TILE/2;
+    G.enemy.animX  = G.enemy.col  * TILE + TILE/2;
+    G.enemy.animY  = G.enemy.row  * TILE + TILE/2;
+
     const queue=[];
 
     // 按步骤交织移动+开火
@@ -921,6 +934,14 @@ function executePlan(){
 
 function processAnimQueue(dt){
     if(G.animIdx >= G.animQueue.length){
+        // 动画结束：强制 snap 坐标，杜绝残留插值
+        G.player.animX = G.player.col * TILE + TILE/2;
+        G.player.animY = G.player.row * TILE + TILE/2;
+        G.enemy.animX  = G.enemy.col  * TILE + TILE/2;
+        G.enemy.animY  = G.enemy.row  * TILE + TILE/2;
+        // 记录本回合起始位置，用于判断玩家是否真的移动过
+        G.turnStartCol = G.player.col;
+        G.turnStartRow = G.player.row;
         // 完成
         setPhase('player');
         G.player.tickCooldowns();
@@ -945,12 +966,27 @@ function processAnimQueue(dt){
 
     switch(action.type){
         case 'move':
-            if(G.animStepTimer>=0.12){
-                G.player.col=action.col;
-                G.player.row=action.row;
-                G.player.dir=action.dir;
+            // 直接线性插值 animX/animY，不依赖 updateAnim
+            if(!action.startX){
+                action.startX = G.player.animX;
+                action.startY = G.player.animY;
+                action.targetX = action.col * TILE + TILE/2;
+                action.targetY = action.row * TILE + TILE/2;
+                action.duration = 0.12;
+            }
+            {
+                const t = Math.min(1, G.animStepTimer / action.duration);
+                G.player.animX = action.startX + (action.targetX - action.startX) * t;
+                G.player.animY = action.startY + (action.targetY - action.startY) * t;
+            }
+            if(G.animStepTimer >= action.duration){
+                G.player.col = action.col;
+                G.player.row = action.row;
+                G.player.dir = action.dir;
+                G.player.animX = action.targetX;
+                G.player.animY = action.targetY;
                 spawnWake(G.player.animX, G.player.animY);
-                action.done=true;
+                action.done = true;
             }
             break;
         case 'swingrun':
@@ -1372,7 +1408,7 @@ function loop(ts){
     waveOff+=dt*22;
 
     // 更新相机
-    updateCamera();
+    updateCamera(dt);
     lerpCamera(dt);
 
     // 更新动画
@@ -1405,7 +1441,8 @@ canvas.addEventListener('click', e=>{
     if(!G.planning) return;
     const rect=canvas.getBoundingClientRect();
     const mx=e.clientX-rect.left, my=e.clientY-rect.top;
-    const {col,row}=p2g(mx,my);
+    const wx=mx+cam.x, wy=my+cam.y;   // 屏幕坐标 → 世界坐标
+    const {col,row}=p2g(wx,wy);
     tryAddStep(col,row);
 });
 
@@ -1446,8 +1483,14 @@ function rebuildTurnCount(){
 //  键盘控制
 // ═══════════════════════════════════════════════════════════
 document.addEventListener('keydown', ev=>{
-    const k=ev.key;
+    const c=ev.code;
+    // WASD / 方向键：移动视角（用 code 而非 key，避免焦点/输入法拦截）
+    if(c==='KeyW'||c==='ArrowUp')    { camKeys.up=true;    ev.preventDefault(); return; }
+    if(c==='KeyS'||c==='ArrowDown')  { camKeys.down=true;  ev.preventDefault(); return; }
+    if(c==='KeyA'||c==='ArrowLeft')  { camKeys.left=true;  ev.preventDefault(); return; }
+    if(c==='KeyD'||c==='ArrowRight') { camKeys.right=true; ev.preventDefault(); return; }
     // 数字键开火
+    const k=ev.key;
     if(k==='1') document.getElementById('btn-fire-prow').click();
     if(k==='2') document.getElementById('btn-fire-port').click();
     if(k==='3') document.getElementById('btn-fire-star').click();
@@ -1460,6 +1503,14 @@ document.addEventListener('keydown', ev=>{
     if(k==='p'||k==='P') startPlanning();
 });
 
+document.addEventListener('keyup', ev=>{
+    const c=ev.code;
+    if(c==='KeyW'||c==='ArrowUp')    camKeys.up=false;
+    if(c==='KeyS'||c==='ArrowDown')  camKeys.down=false;
+    if(c==='KeyA'||c==='ArrowLeft')  camKeys.left=false;
+    if(c==='KeyD'||c==='ArrowRight') camKeys.right=false;
+});
+
 // ═══════════════════════════════════════════════════════════
 //  按钮绑定
 // ═══════════════════════════════════════════════════════════
@@ -1469,9 +1520,12 @@ document.getElementById('btn-cancel-plan').addEventListener('click', cancelPlann
 
 document.getElementById('btn-end').addEventListener('click', ()=>{
     if(G.phase!=='player'||G.planning) return;
-    // 强制结束（未规划移动时，执行原地不动然后AI回合）
-    if(G.path.length===0){
-        if(!confirm('本回合不移动？（注意：游戏规则要求必须移动）')) return;
+    // 检查玩家是否真的离开了回合起始位置
+    const endCol = G.path.length > 0 ? G.path[G.path.length-1].col : G.player.col;
+    const endRow = G.path.length > 0 ? G.path[G.path.length-1].row : G.player.row;
+    if(endCol === G.turnStartCol && endRow === G.turnStartRow){
+        addLog('⚠ 必须移动后才能结束回合！','#e87e3d');
+        return;
     }
     G.planning=false;
     executePlan();
