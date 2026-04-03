@@ -23,7 +23,95 @@ function resizeCanvas() {
     canvas.height = area.clientHeight;
 }
 resizeCanvas();
-window.addEventListener('resize', () => { resizeCanvas(); renderAll(); });
+window.addEventListener('resize', () => { resizeCanvas(); renderAll(); checkOrientation(); });
+
+// ── 移动端检测 ───────────────────────────────────────────────
+const IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile|Tablet/i.test(navigator.userAgent)
+                || (navigator.maxTouchPoints > 1 && !/Win/.test(navigator.platform));
+
+if (IS_MOBILE) {
+    document.body.classList.add('mobile');
+}
+
+// 横屏检测
+const rotateTip = document.getElementById('rotate-tip');
+function checkOrientation() {
+    if (!IS_MOBILE) return;
+    const isLandscape = window.innerWidth > window.innerHeight;
+    rotateTip.style.display = isLandscape ? 'none' : 'flex';
+}
+checkOrientation();
+window.addEventListener('orientationchange', () => setTimeout(checkOrientation, 300));
+
+// ── 摇杆 ────────────────────────────────────────────────────
+const jWrap = document.getElementById('joystick-wrap');
+const jKnob = document.getElementById('joystick-knob');
+const JR    = 55;   // 摇杆底盘半径（px）
+const KR    = 22;   // 摇杆旋钮半径（px）
+const DEAD  = 0.25; // 死区比例
+
+let jActive = false;
+let jOriginX = 0, jOriginY = 0; // 触点起始位置（相对摇杆容器）
+
+function jSetKnob(dx, dy) {
+    // dx/dy 是相对摇杆起点的偏移，clamp 到底盘半径内
+    const dist = Math.hypot(dx, dy);
+    const clampDist = Math.min(dist, JR - KR);
+    const angle = Math.atan2(dy, dx);
+    // knob 以容器中心 (JR, JR) 为基点
+    const kx = JR + Math.cos(angle) * clampDist;
+    const ky = JR + Math.sin(angle) * clampDist;
+    jKnob.style.left = kx + 'px';
+    jKnob.style.top  = ky + 'px';
+    jKnob.style.transform = 'translate(-50%,-50%)';
+}
+
+function jReset() {
+    jActive = false;
+    camKeys.up = camKeys.down = camKeys.left = camKeys.right = false;
+    jKnob.style.left = '50%';
+    jKnob.style.top  = '50%';
+    jKnob.style.transform = 'translate(-50%,-50%)';
+}
+
+function jUpdateKeys(dx, dy) {
+    const dist = Math.hypot(dx, dy);
+    const ratio = dist / JR;
+    if (ratio < DEAD) {
+        camKeys.up = camKeys.down = camKeys.left = camKeys.right = false;
+        return;
+    }
+    const angle = Math.atan2(dy, dx); // -π ~ π
+    const deg   = angle * 180 / Math.PI; // -180 ~ 180
+    // 八方向映射：以 67.5° 为扇区
+    camKeys.right = deg > -67.5  && deg <  67.5;
+    camKeys.left  = deg > 112.5  || deg < -112.5;
+    camKeys.down  = deg >  22.5  && deg < 157.5;
+    camKeys.up    = deg < -22.5  && deg > -157.5;
+}
+
+jWrap.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const t = e.changedTouches[0];
+    const rect = jWrap.getBoundingClientRect();
+    jOriginX = t.clientX - rect.left;
+    jOriginY = t.clientY - rect.top;
+    jActive = true;
+}, { passive: false });
+
+jWrap.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (!jActive) return;
+    const t = e.changedTouches[0];
+    const rect = jWrap.getBoundingClientRect();
+    const dx = (t.clientX - rect.left) - jOriginX;
+    const dy = (t.clientY - rect.top)  - jOriginY;
+    jSetKnob(dx, dy);
+    jUpdateKeys(dx, dy);
+}, { passive: false });
+
+jWrap.addEventListener('touchend',    () => jReset(), { passive: true });
+jWrap.addEventListener('touchcancel', () => jReset(), { passive: true });
 
 // ── 相机系统 ────────────────────────────────────────────────
 // cam.x/y 是世界坐标系中，视口左上角对应的格像素偏移
@@ -1445,6 +1533,48 @@ canvas.addEventListener('click', e=>{
     const {col,row}=p2g(wx,wy);
     tryAddStep(col,row);
 });
+
+// 移动端触摸支持
+let touchStartTime = 0;
+let touchStartX = 0, touchStartY = 0;
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const t = e.changedTouches[0];
+    touchStartTime = Date.now();
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    if (!G.planning) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    const dist = Math.hypot(dx, dy);
+    const dur  = Date.now() - touchStartTime;
+    // 长按（>400ms 且未移动）→ 撤销最后一步（替代右键）
+    if (dur > 400 && dist < 10) {
+        if (G.path.length > 0) {
+            G.path.pop();
+            G.planCurCol = G.path.length > 0 ? G.path[G.path.length-1].col : G.player.col;
+            G.planCurRow = G.path.length > 0 ? G.path[G.path.length-1].row : G.player.row;
+            G.planCurDir = G.path.length > 0 ? G.path[G.path.length-1].dir : G.player.dir;
+            rebuildTurnCount();
+            updateHUD(); renderAll();
+        }
+        return;
+    }
+    // 短按且未移动 → 规划格子
+    if (dist < 15) {
+        const rect = canvas.getBoundingClientRect();
+        const mx = t.clientX - rect.left;
+        const my = t.clientY - rect.top;
+        const wx = mx + cam.x, wy = my + cam.y;
+        const {col, row} = p2g(wx, wy);
+        tryAddStep(col, row);
+    }
+}, { passive: false });
 
 canvas.addEventListener('contextmenu', e=>{
     e.preventDefault();

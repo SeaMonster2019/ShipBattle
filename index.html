@@ -2,6 +2,9 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>虚空海战 - Void Combat</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -132,9 +135,65 @@ canvas { display:block; }
     color:#d4e8f0; border-radius:8px; cursor:pointer; font-size:16px;
 }
 #overlay .restart-btn:hover { background:#1a3a5c; }
+/* ── 横屏强制提示（手机竖屏时显示） ── */
+#rotate-tip {
+    display: none;
+    position: fixed; inset: 0; z-index: 9999;
+    background: #060e1a;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 16px; color: #d4e8f0; font-size: 18px; text-align: center;
+}
+#rotate-tip .icon { font-size: 56px; animation: spin 1.5s infinite linear; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── 移动端：面板折叠、字体缩小 ── */
+body.mobile #left-panel,
+body.mobile #right-panel {
+    width: 160px; min-width: 160px; font-size: 10px;
+}
+body.mobile .skill-btn  { padding: 4px 6px; font-size: 10px; }
+body.mobile .act-btn    { padding: 6px 8px;  font-size: 11px; min-width: 60px; }
+body.mobile #action-bar { min-width: 300px; padding: 6px 10px; }
+body.mobile #log-box    { width: 200px; font-size: 10px; right: 170px; bottom: 100px; }
+
+/* ── 摇杆容器（手机端才显示） ── */
+#joystick-wrap {
+    display: none;
+    position: absolute;
+    left: 12px; bottom: 12px;
+    width: 110px; height: 110px;
+    z-index: 200;
+    touch-action: none;
+}
+body.mobile #joystick-wrap { display: block; }
+
+#joystick-base {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: rgba(74,159,200,0.15);
+    border: 2px solid rgba(74,159,200,0.4);
+}
+#joystick-knob {
+    position: absolute;
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: rgba(74,159,200,0.6);
+    border: 2px solid #4a9fc8;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    transition: background .1s;
+}
 </style>
 </head>
 <body>
+<!-- 竖屏提示（手机竖屏时全屏遮罩） -->
+<div id="rotate-tip">
+    <div class="icon">📱</div>
+    <div>请将手机横屏使用</div>
+    <div style="font-size:13px;color:#8ab0c8;">Please rotate to landscape</div>
+</div>
+
 <div id="main">
     <!-- 左面板：玩家信息 -->
     <div id="left-panel">
@@ -190,6 +249,12 @@ canvas { display:block; }
     <!-- 画布 -->
     <div id="canvas-area">
         <canvas id="c"></canvas>
+
+        <!-- 摇杆（手机端替代 WASD） -->
+        <div id="joystick-wrap">
+            <div id="joystick-base"></div>
+            <div id="joystick-knob"></div>
+        </div>
 
         <div id="status-bar">
             <span id="status-text">初始化中...</span>
